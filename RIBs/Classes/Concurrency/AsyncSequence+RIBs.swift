@@ -18,39 +18,6 @@
 
 import RxSwift
 
-/// A type-erased async sequence used to preserve element type information without requiring typed
-/// `AsyncSequence` availability.
-public struct AnyAsyncSequence<Element>: AsyncSequence {
-
-    public struct AsyncIterator: AsyncIteratorProtocol {
-
-        private var nextElement: () async throws -> Element?
-
-        fileprivate init<Iterator: AsyncIteratorProtocol>(_ iterator: Iterator) where Iterator.Element == Element {
-            var iterator = iterator
-            nextElement = {
-                try await iterator.next()
-            }
-        }
-
-        public mutating func next() async throws -> Element? {
-            return try await nextElement()
-        }
-    }
-
-    private let makeIterator: () -> AsyncIterator
-
-    public init<Sequence: AsyncSequence>(_ sequence: Sequence) where Sequence.Element == Element {
-        makeIterator = {
-            AsyncIterator(sequence.makeAsyncIterator())
-        }
-    }
-
-    public func makeAsyncIterator() -> AsyncIterator {
-        return makeIterator()
-    }
-}
-
 public extension AsyncSequence {
 
     /// Confines the async sequence's elements to the given interactor scope.
@@ -60,13 +27,11 @@ public extension AsyncSequence {
     /// becomes active again.
     ///
     /// - parameter interactorScope: The interactor scope whose activeness this async sequence is confined to.
-    /// - returns: The async sequence confined to this interactor's activeness lifecycle.
-    func confineTo(_ interactorScope: InteractorScope) -> AnyAsyncSequence<Element> {
-        return AnyAsyncSequence(
-            asObservable()
-                .confineTo(interactorScope)
-                .values
-        )
+    /// - returns: The async throwing stream confined to this interactor's activeness lifecycle.
+    func confineTo(_ interactorScope: InteractorScope) -> AsyncThrowingStream<Element, Error> {
+        return asObservable()
+            .confineTo(interactorScope)
+            .values
     }
 }
 
