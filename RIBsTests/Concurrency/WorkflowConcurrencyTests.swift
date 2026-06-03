@@ -220,6 +220,50 @@ final class WorkflowConcurrencyTests: XCTestCase {
         await fulfillment(of: [taskCancelled], timeout: 1)
     }
 
+    func test_asyncSequenceFork_multipleForksInvokeSharedRootStepOnce() async {
+        let workflow = WorkflowConcurrencyTestWorkflow<()>()
+        let firstBranchRan = expectation(description: "First forked branch ran")
+        let secondBranchRan = expectation(description: "Second forked branch ran")
+        var rootCallCount = 0
+        var firstBranchCallCount = 0
+        var secondBranchCallCount = 0
+        let rootStep = workflow
+            .onStep { _ -> Observable<((), ())> in
+                rootCallCount += 1
+                return Observable.just(((), ()))
+            }
+
+        let firstFork: Step<(), (), ()> = rootStep.asAsyncSequence().fork(workflow)
+        _ = firstFork
+            .onStep { _, _ -> Observable<((), ())> in
+                firstBranchCallCount += 1
+                firstBranchRan.fulfill()
+                return Observable.just(((), ()))
+            }
+            .commit()
+
+        let secondFork: Step<(), (), ()> = rootStep.asAsyncSequence().fork(workflow)
+        _ = secondFork
+            .onStep { _, _ -> Observable<((), ())> in
+                secondBranchCallCount += 1
+                secondBranchRan.fulfill()
+                return Observable.just(((), ()))
+            }
+            .commit()
+
+        XCTAssertEqual(rootCallCount, 0)
+
+        _ = workflow.subscribe(())
+        await fulfillment(of: [firstBranchRan, secondBranchRan], timeout: 1)
+
+        XCTAssertEqual(rootCallCount, 1)
+        XCTAssertEqual(firstBranchCallCount, 1)
+        XCTAssertEqual(secondBranchCallCount, 1)
+        XCTAssertEqual(workflow.forkCallCount, 2)
+        XCTAssertEqual(workflow.completeCallCount, 1)
+        XCTAssertEqual(workflow.errorCallCount, 0)
+    }
+
     func test_asyncSequenceFork_createsWorkflowStep() async {
         let workflow = WorkflowConcurrencyTestWorkflow<()>()
         let completed = expectation(description: "Workflow completed")
@@ -239,7 +283,7 @@ final class WorkflowConcurrencyTests: XCTestCase {
         XCTAssertEqual(workflow.completeCallCount, 1)
     }
 
-    func test_asyncSequenceForkedStepAsAsyncSequence_emitsStepOutput() async throws {
+    func test_asyncSequenceForkedStepAsAsyncSequence_emitsOutputWithoutCommittingWorkflow() async throws {
         let workflow = WorkflowConcurrencyTestWorkflow<()>()
         let asyncSequence = AsyncStream<(Int, String)> { continuation in
             continuation.yield((1, "one"))
@@ -258,6 +302,7 @@ final class WorkflowConcurrencyTests: XCTestCase {
         XCTAssertNil(completedValue)
         XCTAssertEqual(workflow.forkCallCount, 1)
         XCTAssertEqual(workflow.completeCallCount, 0)
+        XCTAssertEqual(workflow.errorCallCount, 0)
     }
 
     func test_asyncSequenceFork_nestedStepsDoNotRepeat() async {
