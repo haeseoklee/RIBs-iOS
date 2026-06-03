@@ -63,6 +63,30 @@ open class Workflow<ActionableItemType> {
             }
     }
 
+    /// Execute the given async closure as the root step.
+    ///
+    /// - parameter onStep: The async closure to execute for the root step.
+    /// - returns: The next step.
+    public final func onAsyncStep<NextActionableItemType, NextValueType>(_ onStep: @escaping (ActionableItemType) async throws -> (NextActionableItemType, NextValueType)) -> Step<ActionableItemType, NextActionableItemType, NextValueType> {
+        return self.onStep { actionableItem in
+            Observable.create { observer in
+                let task = Task {
+                    do {
+                        let result = try await onStep(actionableItem)
+                        observer.onNext(result)
+                        observer.onCompleted()
+                    } catch {
+                        observer.onError(error)
+                    }
+                }
+
+                return Disposables.create {
+                    task.cancel()
+                }
+            }
+        }
+    }
+
     /// Subscribe and start the `Workflow` sequence.
     ///
     /// - parameter actionableItem: The initial actionable item for the first step.

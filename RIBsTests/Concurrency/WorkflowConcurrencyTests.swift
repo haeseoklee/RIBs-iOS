@@ -142,6 +142,79 @@ final class WorkflowConcurrencyTests: XCTestCase {
         XCTAssertEqual(workflow.errorCallCount, 1)
     }
 
+    func test_workflowOnAsyncStep_emitsAsyncResultAndInvokesWorkflowDidComplete() async throws {
+        let workflow = WorkflowConcurrencyTestWorkflow<String>()
+        let step = workflow
+            .onAsyncStep { actionableItem in
+                return (actionableItem.count, actionableItem)
+            }
+        let sequence = step.asAsyncSequence()
+        let stepTask = Task { () -> (Int, String)? in
+            var iterator = sequence.makeAsyncIterator()
+            let value = try await iterator.next()
+            _ = try await iterator.next()
+            return value
+        }
+
+        _ = step.commit()
+        _ = workflow.subscribe("test")
+        let value = try await stepTask.value
+
+        XCTAssertEqual(value?.0, 4)
+        XCTAssertEqual(value?.1, "test")
+        XCTAssertEqual(workflow.completeCallCount, 1)
+        XCTAssertEqual(workflow.errorCallCount, 0)
+    }
+
+    func test_workflowOnAsyncStep_invokesWorkflowDidReceiveError() async {
+        let workflow = WorkflowConcurrencyTestWorkflow<Int>()
+        let step = workflow
+            .onAsyncStep { _ -> (Int, Int) in
+                throw WorkflowConcurrencyTestError.error
+            }
+        let sequence = step.asAsyncSequence()
+        let stepTask = Task { () -> (Int, Int)? in
+            var iterator = sequence.makeAsyncIterator()
+            return try await iterator.next()
+        }
+
+        _ = step.commit()
+        _ = workflow.subscribe(1)
+
+        do {
+            _ = try await stepTask.value
+            XCTFail("Expected async sequence to throw")
+        } catch WorkflowConcurrencyTestError.error {
+            // Expected.
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        XCTAssertEqual(workflow.completeCallCount, 0)
+        XCTAssertEqual(workflow.errorCallCount, 1)
+    }
+
+    func test_workflowOnAsyncStep_cancelsTaskWhenWorkflowDisposableIsDisposed() async {
+        let workflow = Workflow<()>()
+        let taskStarted = expectation(description: "Root async step task started")
+        let taskCancelled = expectation(description: "Root async step task cancelled")
+        let disposable = workflow
+            .onAsyncStep { _ -> ((), ()) in
+                taskStarted.fulfill()
+                while !Task.isCancelled {
+                    await Task.yield()
+                }
+                taskCancelled.fulfill()
+                return ((), ())
+            }
+            .commit()
+            .subscribe(())
+
+        await fulfillment(of: [taskStarted], timeout: 1)
+        disposable.dispose()
+        await fulfillment(of: [taskCancelled], timeout: 1)
+    }
+
     func test_onAsyncStep_emitsAsyncResult() async throws {
         let workflow = Workflow<Int>()
         let step = workflow
