@@ -16,6 +16,13 @@
 
 import RxSwift
 
+/// A handle for a running `Workflow`.
+public protocol WorkflowHandle {
+
+    /// Cancel the running workflow.
+    func cancel()
+}
+
 /// Defines the base class for a sequence of steps that execute a flow through the application RIB tree.
 ///
 /// At each step of a `Workflow` is a pair of value and actionable item. The value can be used to make logic decisions.
@@ -87,6 +94,15 @@ open class Workflow<ActionableItemType> {
         }
     }
 
+    /// Start the committed `Workflow` sequence.
+    ///
+    /// - parameter actionableItem: The initial actionable item for the first step.
+    /// - returns: A handle that can be used to cancel the workflow.
+    @discardableResult
+    public final func start(_ actionableItem: ActionableItemType) -> WorkflowHandle {
+        return WorkflowHandleImpl(disposable: subscribe(actionableItem))
+    }
+
     /// Subscribe and start the `Workflow` sequence.
     ///
     /// - parameter actionableItem: The initial actionable item for the first step.
@@ -119,6 +135,19 @@ open class Workflow<ActionableItemType> {
         }
         didInvokeComplete = true
         didComplete()
+    }
+}
+
+fileprivate final class WorkflowHandleImpl: WorkflowHandle {
+
+    private let disposable: Disposable
+
+    init(disposable: Disposable) {
+        self.disposable = disposable
+    }
+
+    func cancel() {
+        disposable.dispose()
     }
 }
 

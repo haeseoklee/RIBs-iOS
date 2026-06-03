@@ -142,6 +142,42 @@ final class WorkflowConcurrencyTests: XCTestCase {
         XCTAssertEqual(workflow.errorCallCount, 1)
     }
 
+    func test_workflowStart_startsCommittedWorkflow() async {
+        let workflow = Workflow<()>()
+        let stepRan = expectation(description: "Root async step ran")
+
+        _ = workflow
+            .onAsyncStep { _ -> ((), ()) in
+                stepRan.fulfill()
+                return ((), ())
+            }
+            .commit()
+            .start(())
+
+        await fulfillment(of: [stepRan], timeout: 1)
+    }
+
+    func test_workflowHandleCancel_cancelsAsyncStepTask() async {
+        let workflow = Workflow<()>()
+        let taskStarted = expectation(description: "Root async step task started")
+        let taskCancelled = expectation(description: "Root async step task cancelled")
+        let handle = workflow
+            .onAsyncStep { _ -> ((), ()) in
+                taskStarted.fulfill()
+                while !Task.isCancelled {
+                    await Task.yield()
+                }
+                taskCancelled.fulfill()
+                return ((), ())
+            }
+            .commit()
+            .start(())
+
+        await fulfillment(of: [taskStarted], timeout: 1)
+        handle.cancel()
+        await fulfillment(of: [taskCancelled], timeout: 1)
+    }
+
     func test_workflowOnAsyncStep_emitsAsyncResultAndInvokesWorkflowDidComplete() async throws {
         let workflow = WorkflowConcurrencyTestWorkflow<String>()
         let step = workflow
