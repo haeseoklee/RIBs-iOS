@@ -138,7 +138,7 @@ open class Workflow<ActionableItemType> {
     }
 }
 
-fileprivate final class WorkflowHandleImpl: WorkflowHandle {
+private final class WorkflowHandleImpl: WorkflowHandle {
 
     private let disposable: Disposable
 
