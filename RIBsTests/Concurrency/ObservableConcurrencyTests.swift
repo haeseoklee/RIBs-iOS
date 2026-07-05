@@ -20,87 +20,148 @@ import XCTest
 
 final class ObservableConcurrencyTests: XCTestCase {
 
-    func test_observableAsAsyncStream_emitsValuesAndCompletes() async {
-        var iterator = Observable.from([1, 2]).asAsyncStream().makeAsyncIterator()
+    func test_singleFromAsync_emitsSuccess() async {
+        let success = expectation(description: "Single emitted success")
 
-        let firstValue = await iterator.next()
-        let secondValue = await iterator.next()
-        let completedValue = await iterator.next()
-
-        XCTAssertEqual(firstValue, 1)
-        XCTAssertEqual(secondValue, 2)
-        XCTAssertNil(completedValue)
-    }
-
-    func test_observableAsAsyncStream_completesOnError() async {
-        var iterator = Observable<Int>
-            .error(ObservableConcurrencyTestError.error)
-            .asAsyncStream()
-            .makeAsyncIterator()
-
-        let value = await iterator.next()
-
-        XCTAssertNil(value)
-    }
-
-    func test_observableAsAsyncThrowingStream_emitsValuesAndCompletes() async throws {
-        var iterator = Observable.from([1, 2]).asAsyncThrowingStream().makeAsyncIterator()
-
-        let firstValue = try await iterator.next()
-        let secondValue = try await iterator.next()
-        let completedValue = try await iterator.next()
-
-        XCTAssertEqual(firstValue, 1)
-        XCTAssertEqual(secondValue, 2)
-        XCTAssertNil(completedValue)
-    }
-
-    func test_observableAsAsyncThrowingStream_throwsOnError() async {
-        var iterator = Observable<Int>
-            .error(ObservableConcurrencyTestError.error)
-            .asAsyncThrowingStream()
-            .makeAsyncIterator()
-
-        do {
-            _ = try await iterator.next()
-            XCTFail("Expected async sequence to throw")
-        } catch ObservableConcurrencyTestError.error {
-            // Expected.
-        } catch {
-            XCTFail("Unexpected error: \(error)")
+        _ = Single<Int>.fromAsync {
+            return 1
         }
+        .subscribe(
+            onSuccess: { value in
+                XCTAssertEqual(value, 1)
+                success.fulfill()
+            },
+            onFailure: { error in
+                XCTFail("Unexpected error: \(error)")
+            }
+        )
+
+        await fulfillment(of: [success], timeout: 1)
     }
 
-    func test_observableAsAsyncStream_disposesSubscriptionWhenTaskIsCancelled() async {
-        let disposed = expectation(description: "Subscription disposed")
-        let observable = Observable<Int>.never().do(onDispose: {
-            disposed.fulfill()
-        })
+    func test_singleFromAsync_emitsFailure() async {
+        let failure = expectation(description: "Single emitted failure")
 
-        let task = Task {
-            var iterator = observable.asAsyncStream().makeAsyncIterator()
-            _ = await iterator.next()
+        _ = Single<Int>.fromAsync {
+            throw ObservableConcurrencyTestError.error
         }
+        .subscribe(
+            onSuccess: { value in
+                XCTFail("Unexpected value: \(value)")
+            },
+            onFailure: { error in
+                guard case ObservableConcurrencyTestError.error = error else {
+                    XCTFail("Unexpected error: \(error)")
+                    return
+                }
+                failure.fulfill()
+            }
+        )
 
-        await Task.yield()
-        task.cancel()
-        await fulfillment(of: [disposed], timeout: 1)
+        await fulfillment(of: [failure], timeout: 1)
     }
 
-    func test_observableAsAsyncThrowingStream_disposesSubscriptionWhenTaskIsCancelled() async {
-        let disposed = expectation(description: "Subscription disposed")
-        let observable = Observable<Int>.never().do(onDispose: {
-            disposed.fulfill()
-        })
-
-        let task = Task {
-            var iterator = observable.asAsyncThrowingStream().makeAsyncIterator()
-            _ = try? await iterator.next()
+    func test_singleFromAsync_cancelsTaskWhenDisposed() async {
+        let taskStarted = expectation(description: "Task started")
+        let taskCancelled = expectation(description: "Task cancelled")
+        let disposable = Single<Int>.fromAsync {
+            taskStarted.fulfill()
+            while !Task.isCancelled {
+                await Task.yield()
+            }
+            taskCancelled.fulfill()
+            throw CancellationError()
         }
+        .subscribe()
 
-        await Task.yield()
-        task.cancel()
-        await fulfillment(of: [disposed], timeout: 1)
+        await fulfillment(of: [taskStarted], timeout: 1)
+        disposable.dispose()
+        await fulfillment(of: [taskCancelled], timeout: 1)
+    }
+
+    func test_observableFromAsync_emitsValueAndCompletes() async {
+        let completed = expectation(description: "Observable completed")
+        var receivedValues: [Int] = []
+
+        _ = Observable<Int>.fromAsync {
+            return 1
+        }
+        .subscribe(
+            onNext: { value in
+                receivedValues.append(value)
+            },
+            onError: { error in
+                XCTFail("Unexpected error: \(error)")
+            },
+            onCompleted: {
+                completed.fulfill()
+            }
+        )
+
+        await fulfillment(of: [completed], timeout: 1)
+        XCTAssertEqual(receivedValues, [1])
+    }
+
+    func test_mapAsync_emitsValuesInOrder() async {
+        let completed = expectation(description: "Observable completed")
+        var receivedValues: [Int] = []
+
+        _ = Observable.from([1, 2, 3])
+            .mapAsync { value in
+                value * 2
+            }
+            .subscribe(
+                onNext: { value in
+                    receivedValues.append(value)
+                },
+                onError: { error in
+                    XCTFail("Unexpected error: \(error)")
+                },
+                onCompleted: {
+                    completed.fulfill()
+                }
+            )
+
+        await fulfillment(of: [completed], timeout: 1)
+        XCTAssertEqual(receivedValues, [2, 4, 6])
+    }
+
+    func test_flatMapLatestAsync_cancelsInFlightTaskWhenNewElementArrives() async {
+        let firstTaskStarted = expectation(description: "First task started")
+        let firstTaskCancelled = expectation(description: "First task cancelled")
+        let valueReceived = expectation(description: "Latest value received")
+        let subject = PublishSubject<Int>()
+        var receivedValues: [Int] = []
+
+        let disposable = subject
+            .flatMapLatestAsync { value in
+                if value == 1 {
+                    firstTaskStarted.fulfill()
+                    while !Task.isCancelled {
+                        await Task.yield()
+                    }
+                    firstTaskCancelled.fulfill()
+                    throw CancellationError()
+                }
+                return value * 10
+            }
+            .subscribe(
+                onNext: { value in
+                    receivedValues.append(value)
+                    valueReceived.fulfill()
+                },
+                onError: { error in
+                    XCTFail("Unexpected error: \(error)")
+                }
+            )
+
+        subject.onNext(1)
+        await fulfillment(of: [firstTaskStarted], timeout: 1)
+        subject.onNext(2)
+        await fulfillment(of: [firstTaskCancelled, valueReceived], timeout: 1)
+
+        XCTAssertEqual(receivedValues, [20])
+        disposable.dispose()
     }
 }
 

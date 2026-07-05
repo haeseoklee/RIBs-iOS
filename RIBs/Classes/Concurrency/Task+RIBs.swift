@@ -18,116 +18,36 @@
 
 import RxSwift
 
-public extension Interactor {
+public extension Task {
 
-    /// Runs a task that is cancelled when this interactor deactivates.
-    ///
-    /// If the interactor is inactive when this method is invoked, the task is cancelled immediately.
+    /// Cancel this task when the given interactor deactivates.
     @discardableResult
-    func taskOnDeactivate(
-        priority: TaskPriority? = nil,
-        operation: @escaping () async -> ()
-    ) -> Task<Void, Never> {
-        let task = Task(priority: priority) {
-            await operation()
-        }
+    func cancelOnDeactivate(interactor: Interactor) -> Task<Success, Failure> {
         Disposables.create {
-            task.cancel()
+            self.cancel()
         }
-        .disposeOnDeactivate(interactor: self)
-        return task
+        .disposeOnDeactivate(interactor: interactor)
+        return self
     }
 
-    /// Runs a throwing task that is cancelled when this interactor deactivates.
-    ///
-    /// If the interactor is inactive when this method is invoked, the task is cancelled immediately.
+    /// Cancel this task when the given worker stops.
     @discardableResult
-    func throwingTaskOnDeactivate(
-        priority: TaskPriority? = nil,
-        operation: @escaping () async throws -> ()
-    ) -> Task<Void, Error> {
-        let task = Task(priority: priority) {
-            try await operation()
-        }
+    func cancelOnStop(_ worker: Worker) -> Task<Success, Failure> {
         Disposables.create {
-            task.cancel()
+            self.cancel()
         }
-        .disposeOnDeactivate(interactor: self)
-        return task
-    }
-}
-
-public extension Worker {
-
-    /// Runs a task that is cancelled when this worker stops.
-    ///
-    /// If the worker is stopped when this method is invoked, the task is cancelled immediately.
-    @discardableResult
-    func taskOnStop(
-        priority: TaskPriority? = nil,
-        operation: @escaping () async -> ()
-    ) -> Task<Void, Never> {
-        let task = Task(priority: priority) {
-            await operation()
-        }
-        Disposables.create {
-            task.cancel()
-        }
-        .disposeOnStop(self)
-        return task
+        .disposeOnStop(worker)
+        return self
     }
 
-    /// Runs a throwing task that is cancelled when this worker stops.
-    ///
-    /// If the worker is stopped when this method is invoked, the task is cancelled immediately.
+    /// Cancel this task when the given workflow is disposed.
     @discardableResult
-    func throwingTaskOnStop(
-        priority: TaskPriority? = nil,
-        operation: @escaping () async throws -> ()
-    ) -> Task<Void, Error> {
-        let task = Task(priority: priority) {
-            try await operation()
-        }
+    func cancel<ActionableItemType>(with workflow: Workflow<ActionableItemType>) -> Task<Success, Failure> {
         Disposables.create {
-            task.cancel()
+            self.cancel()
         }
-        .disposeOnStop(self)
-        return task
-    }
-}
-
-public extension Workflow {
-
-    /// Runs a task that is cancelled when this workflow is disposed.
-    @discardableResult
-    func task(
-        priority: TaskPriority? = nil,
-        operation: @escaping () async -> ()
-    ) -> Task<Void, Never> {
-        let task = Task(priority: priority) {
-            await operation()
-        }
-        Disposables.create {
-            task.cancel()
-        }
-        .disposeWith(workflow: self)
-        return task
-    }
-
-    /// Runs a throwing task that is cancelled when this workflow is disposed.
-    @discardableResult
-    func throwingTask(
-        priority: TaskPriority? = nil,
-        operation: @escaping () async throws -> ()
-    ) -> Task<Void, Error> {
-        let task = Task(priority: priority) {
-            try await operation()
-        }
-        Disposables.create {
-            task.cancel()
-        }
-        .disposeWith(workflow: self)
-        return task
+        .disposeWith(workflow: workflow)
+        return self
     }
 }
 #endif

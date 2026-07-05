@@ -19,48 +19,20 @@ import XCTest
 
 final class WorkerConcurrencyTests: XCTestCase {
 
-    func test_isStartedSequence_emitsCurrentValueAndChanges() async {
-        let interactor = Interactor()
-        let worker = Worker()
-        var iterator = worker.isStartedSequence.makeAsyncIterator()
-
-        let initialValue = await iterator.next()
-        interactor.activate()
-        worker.start(interactor)
-        let startedValue = await iterator.next()
-        worker.stop()
-        let stoppedValue = await iterator.next()
-
-        XCTAssertEqual(initialValue, false)
-        XCTAssertEqual(startedValue, true)
-        XCTAssertEqual(stoppedValue, false)
-    }
-
-    func test_isStartedSequence_completesWhenWorkerDeinitializes() async {
-        var worker: Worker? = Worker()
-        var iterator = worker?.isStartedSequence.makeAsyncIterator()
-
-        let initialValue = await iterator?.next()
-        worker = nil
-        let completedValue = await iterator?.next()
-
-        XCTAssertEqual(initialValue, false)
-        XCTAssertNil(completedValue)
-    }
-
-    func test_taskOnStop_cancelsTaskWhenWorkerStops() async {
+    func test_taskCancelOnStop_cancelsTaskWhenWorkerStops() async {
         let interactor = Interactor()
         let worker = Worker()
         let taskCancelled = expectation(description: "Task cancelled")
         interactor.activate()
         worker.start(interactor)
 
-        let task = worker.taskOnStop {
+        let task = Task {
             while !Task.isCancelled {
                 await Task.yield()
             }
             taskCancelled.fulfill()
         }
+        .cancelOnStop(worker)
         XCTAssertFalse(task.isCancelled)
 
         worker.stop()
@@ -69,98 +41,35 @@ final class WorkerConcurrencyTests: XCTestCase {
         XCTAssertTrue(task.isCancelled)
     }
 
-    func test_taskOnStop_cancelsImmediatelyWhenWorkerIsStopped() async {
+    func test_taskCancelOnStop_cancelsImmediatelyWhenWorkerIsStopped() async {
         let worker = Worker()
         let taskCancelled = expectation(description: "Task cancelled")
 
-        let task = worker.taskOnStop {
+        let task = Task {
             while !Task.isCancelled {
                 await Task.yield()
             }
             taskCancelled.fulfill()
         }
-        await fulfillment(of: [taskCancelled], timeout: 1)
+        .cancelOnStop(worker)
 
+        await fulfillment(of: [taskCancelled], timeout: 1)
         XCTAssertTrue(task.isCancelled)
     }
 
-    func test_throwingTaskOnStop_cancelsTaskWhenWorkerStops() async {
+    func test_throwingTaskCancelOnStop_cancelsTaskWhenWorkerStops() async {
         let interactor = Interactor()
         let worker = Worker()
         interactor.activate()
         worker.start(interactor)
 
-        let task = worker.throwingTaskOnStop {
+        let task = Task {
             try await Task.sleep(nanoseconds: 10_000_000_000)
         }
+        .cancelOnStop(worker)
         XCTAssertFalse(task.isCancelled)
 
         worker.stop()
-
-        do {
-            try await task.value
-            XCTFail("Expected task to throw CancellationError")
-        } catch is CancellationError {
-            // Expected.
-        } catch {
-            XCTFail("Unexpected error: \(error)")
-        }
-
-        XCTAssertTrue(task.isCancelled)
-    }
-
-    func test_throwingTaskOnStop_cancelsImmediatelyWhenWorkerIsStopped() async {
-        let worker = Worker()
-
-        let task = worker.throwingTaskOnStop {
-            try await Task.sleep(nanoseconds: 10_000_000_000)
-        }
-
-        do {
-            try await task.value
-            XCTFail("Expected task to throw CancellationError")
-        } catch is CancellationError {
-            // Expected.
-        } catch {
-            XCTFail("Unexpected error: \(error)")
-        }
-
-        XCTAssertTrue(task.isCancelled)
-    }
-
-    func test_taskOnStop_cancelsTaskWhenWorkerDeinitializes() async {
-        let interactor = Interactor()
-        var worker: Worker? = Worker()
-        let taskCancelled = expectation(description: "Task cancelled")
-        interactor.activate()
-        worker?.start(interactor)
-
-        let task = worker!.taskOnStop {
-            while !Task.isCancelled {
-                await Task.yield()
-            }
-            taskCancelled.fulfill()
-        }
-        XCTAssertFalse(task.isCancelled)
-
-        worker = nil
-        await fulfillment(of: [taskCancelled], timeout: 1)
-
-        XCTAssertTrue(task.isCancelled)
-    }
-
-    func test_throwingTaskOnStop_cancelsTaskWhenWorkerDeinitializes() async {
-        let interactor = Interactor()
-        var worker: Worker? = Worker()
-        interactor.activate()
-        worker?.start(interactor)
-
-        let task = worker!.throwingTaskOnStop {
-            try await Task.sleep(nanoseconds: 10_000_000_000)
-        }
-        XCTAssertFalse(task.isCancelled)
-
-        worker = nil
 
         do {
             try await task.value

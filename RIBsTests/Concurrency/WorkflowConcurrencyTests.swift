@@ -20,15 +20,16 @@ import XCTest
 
 final class WorkflowConcurrencyTests: XCTestCase {
 
-    func test_workflowTask_cancelsWhenWorkflowDisposableIsDisposed() async {
+    func test_workflowTaskCancelWithWorkflow_cancelsWhenWorkflowDisposableIsDisposed() async {
         let workflow = Workflow<()>()
         let taskCancelled = expectation(description: "Task cancelled")
-        let task = workflow.task {
+        let task = Task {
             while !Task.isCancelled {
                 await Task.yield()
             }
             taskCancelled.fulfill()
         }
+        .cancel(with: workflow)
         let disposable = workflow
             .onStep { _ in
                 Observable.just(((), ()))
@@ -43,11 +44,12 @@ final class WorkflowConcurrencyTests: XCTestCase {
         XCTAssertTrue(task.isCancelled)
     }
 
-    func test_workflowThrowingTask_cancelsWhenWorkflowDisposableIsDisposed() async {
+    func test_throwingTaskCancelWithWorkflow_cancelsWhenWorkflowDisposableIsDisposed() async {
         let workflow = Workflow<()>()
-        let task = workflow.throwingTask {
+        let task = Task {
             try await Task.sleep(nanoseconds: 10_000_000_000)
         }
+        .cancel(with: workflow)
         let disposable = workflow
             .onStep { _ in
                 Observable.just(((), ()))
@@ -70,162 +72,45 @@ final class WorkflowConcurrencyTests: XCTestCase {
         XCTAssertTrue(task.isCancelled)
     }
 
-    func test_stepAsAsyncSequence_emitsStepOutput() async throws {
-        let workflow = Workflow<String>()
-        let step = workflow
-            .onStep { actionableItem in
-                Observable.just((actionableItem.count, actionableItem))
-            }
-        let sequence = step.asAsyncSequence()
-        let stepTask = Task { () -> (Int, String)? in
-            var iterator = sequence.makeAsyncIterator()
-            return try await iterator.next()
-        }
-
-        _ = step.commit()
-        _ = workflow.subscribe("test")
-        let value = try await stepTask.value
-
-        XCTAssertEqual(value?.0, 4)
-        XCTAssertEqual(value?.1, "test")
-    }
-
-    func test_stepAsAsyncSequence_invokesWorkflowDidComplete() async throws {
-        let workflow = WorkflowConcurrencyTestWorkflow<Int>()
-        let step = workflow
-            .onStep { actionableItem in
-                Observable.just((actionableItem, actionableItem))
-            }
-        let sequence = step.asAsyncSequence()
-        let stepTask = Task { () -> (Int, Int)? in
-            var iterator = sequence.makeAsyncIterator()
-            let value = try await iterator.next()
-            _ = try await iterator.next()
-            return value
-        }
-
-        _ = step.commit()
-        _ = workflow.subscribe(1)
-        let value = try await stepTask.value
-
-        XCTAssertEqual(value?.0, 1)
-        XCTAssertEqual(value?.1, 1)
-        XCTAssertEqual(workflow.completeCallCount, 1)
-        XCTAssertEqual(workflow.errorCallCount, 0)
-    }
-
-    func test_stepAsAsyncSequence_invokesWorkflowDidReceiveError() async {
-        let workflow = WorkflowConcurrencyTestWorkflow<Int>()
-        let step = workflow
-            .onStep { _ in
-                Observable<(Int, Int)>.error(WorkflowConcurrencyTestError.error)
-            }
-        let sequence = step.asAsyncSequence()
-        let stepTask = Task { () -> (Int, Int)? in
-            var iterator = sequence.makeAsyncIterator()
-            return try await iterator.next()
-        }
-
-        _ = step.commit()
-        _ = workflow.subscribe(1)
-
-        do {
-            _ = try await stepTask.value
-            XCTFail("Expected async sequence to throw")
-        } catch WorkflowConcurrencyTestError.error {
-            // Expected.
-        } catch {
-            XCTFail("Unexpected error: \(error)")
-        }
-
-        XCTAssertEqual(workflow.completeCallCount, 0)
-        XCTAssertEqual(workflow.errorCallCount, 1)
-    }
-
-    func test_workflowStart_startsCommittedWorkflow() async {
-        let workflow = Workflow<()>()
+    func test_workflowOnAsyncStep_emitsAsyncResultAndInvokesWorkflowDidComplete() async {
+        let workflow = WorkflowConcurrencyTestWorkflow<String>()
         let stepRan = expectation(description: "Root async step ran")
+        workflow.onComplete = {
+            stepRan.fulfill()
+        }
 
         _ = workflow
-            .onAsyncStep { _ -> ((), ()) in
-                stepRan.fulfill()
-                return ((), ())
-            }
-            .commit()
-            .start(())
-
-        await fulfillment(of: [stepRan], timeout: 1)
-    }
-
-    func test_workflowHandleCancel_cancelsAsyncStepTask() async {
-        let workflow = Workflow<()>()
-        let taskStarted = expectation(description: "Root async step task started")
-        let taskCancelled = expectation(description: "Root async step task cancelled")
-        let handle = workflow
-            .onAsyncStep { _ -> ((), ()) in
-                taskStarted.fulfill()
-                while !Task.isCancelled {
-                    await Task.yield()
-                }
-                taskCancelled.fulfill()
-                return ((), ())
-            }
-            .commit()
-            .start(())
-
-        await fulfillment(of: [taskStarted], timeout: 1)
-        handle.cancel()
-        await fulfillment(of: [taskCancelled], timeout: 1)
-    }
-
-    func test_workflowOnAsyncStep_emitsAsyncResultAndInvokesWorkflowDidComplete() async throws {
-        let workflow = WorkflowConcurrencyTestWorkflow<String>()
-        let step = workflow
             .onAsyncStep { actionableItem in
                 return (actionableItem.count, actionableItem)
             }
-        let sequence = step.asAsyncSequence()
-        let stepTask = Task { () -> (Int, String)? in
-            var iterator = sequence.makeAsyncIterator()
-            let value = try await iterator.next()
-            _ = try await iterator.next()
-            return value
-        }
+            .onStep { length, value in
+                XCTAssertEqual(length, 4)
+                XCTAssertEqual(value, "test")
+                return Observable.just(((), ()))
+            }
+            .commit()
+            .subscribe("test")
 
-        _ = step.commit()
-        _ = workflow.subscribe("test")
-        let value = try await stepTask.value
-
-        XCTAssertEqual(value?.0, 4)
-        XCTAssertEqual(value?.1, "test")
+        await fulfillment(of: [stepRan], timeout: 1)
         XCTAssertEqual(workflow.completeCallCount, 1)
         XCTAssertEqual(workflow.errorCallCount, 0)
     }
 
     func test_workflowOnAsyncStep_invokesWorkflowDidReceiveError() async {
         let workflow = WorkflowConcurrencyTestWorkflow<Int>()
-        let step = workflow
+        let receivedError = expectation(description: "Workflow received error")
+        workflow.onError = {
+            receivedError.fulfill()
+        }
+
+        _ = workflow
             .onAsyncStep { _ -> (Int, Int) in
                 throw WorkflowConcurrencyTestError.error
             }
-        let sequence = step.asAsyncSequence()
-        let stepTask = Task { () -> (Int, Int)? in
-            var iterator = sequence.makeAsyncIterator()
-            return try await iterator.next()
-        }
+            .commit()
+            .subscribe(1)
 
-        _ = step.commit()
-        _ = workflow.subscribe(1)
-
-        do {
-            _ = try await stepTask.value
-            XCTFail("Expected async sequence to throw")
-        } catch WorkflowConcurrencyTestError.error {
-            // Expected.
-        } catch {
-            XCTFail("Unexpected error: \(error)")
-        }
-
+        await fulfillment(of: [receivedError], timeout: 1)
         XCTAssertEqual(workflow.completeCallCount, 0)
         XCTAssertEqual(workflow.errorCallCount, 1)
     }
@@ -251,56 +136,47 @@ final class WorkflowConcurrencyTests: XCTestCase {
         await fulfillment(of: [taskCancelled], timeout: 1)
     }
 
-    func test_onAsyncStep_emitsAsyncResult() async throws {
+    func test_onAsyncStep_emitsAsyncResult() async {
         let workflow = Workflow<Int>()
-        let step = workflow
+        let stepRan = expectation(description: "Async step ran")
+
+        _ = workflow
             .onStep { actionableItem in
                 Observable.just((actionableItem, actionableItem))
             }
             .onAsyncStep { actionableItem, value in
                 return (actionableItem + 1, value + 2)
             }
-        let sequence = step.asAsyncSequence()
-        let stepTask = Task { () -> (Int, Int)? in
-            var iterator = sequence.makeAsyncIterator()
-            return try await iterator.next()
-        }
+            .onStep { actionableItem, value in
+                XCTAssertEqual(actionableItem, 2)
+                XCTAssertEqual(value, 3)
+                stepRan.fulfill()
+                return Observable.just(((), ()))
+            }
+            .commit()
+            .subscribe(1)
 
-        _ = step.commit()
-        _ = workflow.subscribe(1)
-        let value = try await stepTask.value
-
-        XCTAssertEqual(value?.0, 2)
-        XCTAssertEqual(value?.1, 3)
+        await fulfillment(of: [stepRan], timeout: 1)
     }
 
     func test_onAsyncStep_invokesWorkflowDidReceiveError() async {
         let workflow = WorkflowConcurrencyTestWorkflow<Int>()
-        let step = workflow
+        let receivedError = expectation(description: "Workflow received error")
+        workflow.onError = {
+            receivedError.fulfill()
+        }
+
+        _ = workflow
             .onStep { actionableItem in
                 Observable.just((actionableItem, actionableItem))
             }
             .onAsyncStep { _, _ -> (Int, Int) in
                 throw WorkflowConcurrencyTestError.error
             }
-        let sequence = step.asAsyncSequence()
-        let stepTask = Task { () -> (Int, Int)? in
-            var iterator = sequence.makeAsyncIterator()
-            return try await iterator.next()
-        }
+            .commit()
+            .subscribe(1)
 
-        _ = step.commit()
-        _ = workflow.subscribe(1)
-
-        do {
-            _ = try await stepTask.value
-            XCTFail("Expected async sequence to throw")
-        } catch WorkflowConcurrencyTestError.error {
-            // Expected.
-        } catch {
-            XCTFail("Unexpected error: \(error)")
-        }
-
+        await fulfillment(of: [receivedError], timeout: 1)
         XCTAssertEqual(workflow.completeCallCount, 0)
         XCTAssertEqual(workflow.errorCallCount, 1)
     }
@@ -327,155 +203,6 @@ final class WorkflowConcurrencyTests: XCTestCase {
         await fulfillment(of: [taskStarted], timeout: 1)
         disposable.dispose()
         await fulfillment(of: [taskCancelled], timeout: 1)
-    }
-
-    func test_asyncSequenceFork_multipleForksInvokeSharedRootStepOnce() async {
-        let workflow = WorkflowConcurrencyTestWorkflow<()>()
-        let firstBranchRan = expectation(description: "First forked branch ran")
-        let secondBranchRan = expectation(description: "Second forked branch ran")
-        var rootCallCount = 0
-        var firstBranchCallCount = 0
-        var secondBranchCallCount = 0
-        let rootStep = workflow
-            .onStep { _ -> Observable<((), ())> in
-                rootCallCount += 1
-                return Observable.just(((), ()))
-            }
-
-        let firstFork: Step<(), (), ()> = rootStep.asAsyncSequence().fork(workflow)
-        _ = firstFork
-            .onStep { _, _ -> Observable<((), ())> in
-                firstBranchCallCount += 1
-                firstBranchRan.fulfill()
-                return Observable.just(((), ()))
-            }
-            .commit()
-
-        let secondFork: Step<(), (), ()> = rootStep.asAsyncSequence().fork(workflow)
-        _ = secondFork
-            .onStep { _, _ -> Observable<((), ())> in
-                secondBranchCallCount += 1
-                secondBranchRan.fulfill()
-                return Observable.just(((), ()))
-            }
-            .commit()
-
-        XCTAssertEqual(rootCallCount, 0)
-
-        _ = workflow.subscribe(())
-        await fulfillment(of: [firstBranchRan, secondBranchRan], timeout: 1)
-
-        XCTAssertEqual(rootCallCount, 1)
-        XCTAssertEqual(firstBranchCallCount, 1)
-        XCTAssertEqual(secondBranchCallCount, 1)
-        XCTAssertEqual(workflow.forkCallCount, 2)
-        XCTAssertEqual(workflow.completeCallCount, 1)
-        XCTAssertEqual(workflow.errorCallCount, 0)
-    }
-
-    func test_asyncSequenceFork_createsWorkflowStep() async {
-        let workflow = WorkflowConcurrencyTestWorkflow<()>()
-        let completed = expectation(description: "Workflow completed")
-        workflow.onComplete = {
-            completed.fulfill()
-        }
-        let asyncSequence = AsyncStream<((), ())> { continuation in
-            continuation.yield(((), ()))
-            continuation.finish()
-        }
-
-        let step: Step<(), (), ()> = asyncSequence.fork(workflow)
-        _ = step.commit().subscribe(())
-        await fulfillment(of: [completed], timeout: 1)
-
-        XCTAssertEqual(workflow.forkCallCount, 1)
-        XCTAssertEqual(workflow.completeCallCount, 1)
-    }
-
-    func test_asyncSequenceForkedStepAsAsyncSequence_emitsOutputWithoutCommittingWorkflow() async throws {
-        let workflow = WorkflowConcurrencyTestWorkflow<()>()
-        let asyncSequence = AsyncStream<(Int, String)> { continuation in
-            continuation.yield((1, "one"))
-            continuation.finish()
-        }
-
-        let step: Step<(), Int, String> = asyncSequence.fork(workflow)
-        let outputSequence = step.asAsyncSequence()
-        var iterator = outputSequence.makeAsyncIterator()
-
-        let value = try await iterator.next()
-        let completedValue = try await iterator.next()
-
-        XCTAssertEqual(value?.0, 1)
-        XCTAssertEqual(value?.1, "one")
-        XCTAssertNil(completedValue)
-        XCTAssertEqual(workflow.forkCallCount, 1)
-        XCTAssertEqual(workflow.completeCallCount, 0)
-        XCTAssertEqual(workflow.errorCallCount, 0)
-    }
-
-    func test_asyncSequenceFork_nestedStepsDoNotRepeat() async {
-        var outerStep1RunCount = 0
-        var outerStep2RunCount = 0
-        var outerStep3RunCount = 0
-
-        let workflow = WorkflowConcurrencyTestWorkflow<()>()
-        let completed = expectation(description: "Workflow completed")
-        workflow.onComplete = {
-            completed.fulfill()
-        }
-        let asyncSequence = AsyncStream<((), ())> { continuation in
-            continuation.yield(((), ()))
-            continuation.finish()
-        }
-
-        let step: Step<(), (), ()> = asyncSequence.fork(workflow)
-        _ = step
-            .onStep { _, _ -> Observable<((), ())> in
-                outerStep1RunCount += 1
-                return Observable.just(((), ()))
-            }
-            .onStep { _, _ -> Observable<((), ())> in
-                outerStep2RunCount += 1
-                return Observable.just(((), ()))
-            }
-            .onStep { _, _ -> Observable<((), ())> in
-                outerStep3RunCount += 1
-                return Observable.just(((), ()))
-            }
-            .commit()
-            .subscribe(())
-        await fulfillment(of: [completed], timeout: 1)
-
-        XCTAssertEqual(outerStep1RunCount, 1, "Step 1 should not have been run more than once")
-        XCTAssertEqual(outerStep2RunCount, 1, "Step 2 should not have been run more than once")
-        XCTAssertEqual(outerStep3RunCount, 1, "Step 3 should not have been run more than once")
-        XCTAssertEqual(workflow.completeCallCount, 1)
-        XCTAssertEqual(workflow.errorCallCount, 0)
-        XCTAssertEqual(workflow.forkCallCount, 1)
-    }
-
-    func test_asyncSequenceFork_workflowReceivesError() async {
-        let workflow = WorkflowConcurrencyTestWorkflow<()>()
-        let receivedError = expectation(description: "Workflow received error")
-        workflow.onError = {
-            receivedError.fulfill()
-        }
-        let asyncSequence = AsyncThrowingStream<((), ()), Error> { continuation in
-            continuation.finish(throwing: WorkflowConcurrencyTestError.error)
-        }
-
-        let step: Step<(), (), ()> = asyncSequence.fork(workflow)
-        _ = step.commit().subscribe(())
-        await fulfillment(of: [receivedError], timeout: 1)
-
-        XCTAssertEqual(workflow.completeCallCount, 0)
-        XCTAssertEqual(workflow.errorCallCount, 1)
-        XCTAssertEqual(workflow.forkCallCount, 1)
-        guard case WorkflowConcurrencyTestError.error? = workflow.receivedError as? WorkflowConcurrencyTestError else {
-            XCTFail("Expected workflow to receive WorkflowConcurrencyTestError.error")
-            return
-        }
     }
 }
 
