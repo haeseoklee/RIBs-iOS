@@ -44,25 +44,5 @@ public extension ObservableType {
     static func fromAsync(_ work: @escaping () async throws -> Element) -> Observable<Element> {
         return Single<Element>.fromAsync(work).asObservable()
     }
-
-    /// Transform elements by running async work sequentially while preserving order.
-    func mapAsync<Result>(_ transform: @escaping (Element) async throws -> Result) -> Observable<Result> {
-        return concatMap { element in
-            Single<Result>.fromAsync {
-                try await transform(element)
-            }
-            .asObservable()
-        }
-    }
-
-    /// Transform elements by running async work and cancelling in-flight work when a new element arrives.
-    func flatMapLatestAsync<Result>(_ transform: @escaping (Element) async throws -> Result) -> Observable<Result> {
-        return flatMapLatest { element in
-            Single<Result>.fromAsync {
-                try await transform(element)
-            }
-            .asObservable()
-        }
-    }
 }
 #endif

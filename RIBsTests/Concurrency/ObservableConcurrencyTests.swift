@@ -101,68 +101,6 @@ final class ObservableConcurrencyTests: XCTestCase {
         await fulfillment(of: [completed], timeout: 1)
         XCTAssertEqual(receivedValues, [1])
     }
-
-    func test_mapAsync_emitsValuesInOrder() async {
-        let completed = expectation(description: "Observable completed")
-        var receivedValues: [Int] = []
-
-        _ = Observable.from([1, 2, 3])
-            .mapAsync { value in
-                value * 2
-            }
-            .subscribe(
-                onNext: { value in
-                    receivedValues.append(value)
-                },
-                onError: { error in
-                    XCTFail("Unexpected error: \(error)")
-                },
-                onCompleted: {
-                    completed.fulfill()
-                }
-            )
-
-        await fulfillment(of: [completed], timeout: 1)
-        XCTAssertEqual(receivedValues, [2, 4, 6])
-    }
-
-    func test_flatMapLatestAsync_cancelsInFlightTaskWhenNewElementArrives() async {
-        let firstTaskStarted = expectation(description: "First task started")
-        let firstTaskCancelled = expectation(description: "First task cancelled")
-        let valueReceived = expectation(description: "Latest value received")
-        let subject = PublishSubject<Int>()
-        var receivedValues: [Int] = []
-
-        let disposable = subject
-            .flatMapLatestAsync { value in
-                if value == 1 {
-                    firstTaskStarted.fulfill()
-                    while !Task.isCancelled {
-                        await Task.yield()
-                    }
-                    firstTaskCancelled.fulfill()
-                    throw CancellationError()
-                }
-                return value * 10
-            }
-            .subscribe(
-                onNext: { value in
-                    receivedValues.append(value)
-                    valueReceived.fulfill()
-                },
-                onError: { error in
-                    XCTFail("Unexpected error: \(error)")
-                }
-            )
-
-        subject.onNext(1)
-        await fulfillment(of: [firstTaskStarted], timeout: 1)
-        subject.onNext(2)
-        await fulfillment(of: [firstTaskCancelled, valueReceived], timeout: 1)
-
-        XCTAssertEqual(receivedValues, [20])
-        disposable.dispose()
-    }
 }
 
 private enum ObservableConcurrencyTestError: Error {
