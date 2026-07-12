@@ -63,6 +63,19 @@ open class Workflow<ActionableItemType> {
             }
     }
 
+    /// Execute the given async closure as the root step.
+    ///
+    /// - parameter onStep: The async closure to execute for the root step.
+    /// - returns: The next step.
+    public final func onAsyncStep<NextActionableItemType, NextValueType>(_ onStep: @escaping (ActionableItemType) async throws -> (NextActionableItemType, NextValueType)) -> Step<ActionableItemType, NextActionableItemType, NextValueType> {
+        return self.onStep { actionableItem in
+            Single.fromAsync {
+                try await onStep(actionableItem)
+            }
+            .asObservable()
+        }
+    }
+
     /// Subscribe and start the `Workflow` sequence.
     ///
     /// - parameter actionableItem: The initial actionable item for the first step.
@@ -146,6 +159,19 @@ open class Step<WorkflowActionableItemType, ActionableItemType, ValueType> {
         return Step<WorkflowActionableItemType, NextActionableItemType, NextValueType>(workflow: workflow, observable: confinedNextStep)
     }
 
+    /// Executes the given async closure for this step.
+    ///
+    /// - parameter onStep: The async closure to execute for the `Step`.
+    /// - returns: The next step.
+    public final func onAsyncStep<NextActionableItemType, NextValueType>(_ onStep: @escaping (ActionableItemType, ValueType) async throws -> (NextActionableItemType, NextValueType)) -> Step<WorkflowActionableItemType, NextActionableItemType, NextValueType> {
+        return self.onStep { actionableItem, value in
+            Single.fromAsync {
+                try await onStep(actionableItem, value)
+            }
+            .asObservable()
+        }
+    }
+
     /// Executes the given closure when the `Step` produces an error.
     ///
     /// - parameter onError: The closure to execute when an error occurs.
@@ -175,9 +201,10 @@ open class Step<WorkflowActionableItemType, ActionableItemType, ValueType> {
     public final func asObservable() -> Observable<(ActionableItemType, ValueType)> {
         return observable
     }
+
 }
 
-/// `Workflow` related obervable extensions.
+
 public extension ObservableType {
 
     /// Fork the step from this obervable.
